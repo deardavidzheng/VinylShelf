@@ -1,0 +1,30 @@
+# 构建产物（可由 ./build.sh 重新生成，不进版本库）
+build/
+dist/
+*.dmg
+*.app/
+
+# 运行时数据
+covers/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# 凭据——绝不入库
+*.secret
+has-token
+.env
+.env.*
+
+# macOS
+.DS_Store
+._*
+
+# Xcode
+xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+
+# Python（tools/make_icon.py 无依赖，缓存仍忽略）
+__pycache__/
+*.pyc
