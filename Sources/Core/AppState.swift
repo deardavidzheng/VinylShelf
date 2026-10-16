@@ -94,15 +94,36 @@ final class AppState: ObservableObject {
     /// 没有这个开关就只能改代码重来一遍才能截到图。
     /// 正常启动不带该环境变量，不影响用户。
     private func applyStartupPreset() {
-        guard let raw = ProcessInfo.processInfo.environment["VINYLSHELF_PRESET"] else { return }
-        let parts = raw.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-        guard parts.count == 2, let dim = FacetDimension(rawValue: parts[0]) else {
-            FileHandle.standardError.write(Data("VINYLSHELF_PRESET 格式应为 维度=值\n".utf8))
-            return
+        if let raw = ProcessInfo.processInfo.environment["VINYLSHELF_PRESET"], !raw.isEmpty {
+            let parts = raw.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, let dim = FacetDimension(rawValue: parts[0]) else {
+                FileHandle.standardError.write(Data("VINYLSHELF_PRESET 格式应为 维度=值\n".utf8))
+                return
+            }
+            filter.toggle(dimension: dim, value: parts[1])
+            let line = "已预置筛选 \(dim.displayName) = \(parts[1])，命中 \(filteredCount)/\(totalCount)\n"
+            FileHandle.standardError.write(Data(line.utf8))
         }
-        filter.toggle(dimension: dim, value: parts[1])
-        let line = "已预置筛选 \(dim.displayName) = \(parts[1])，命中 \(filteredCount)/\(totalCount)\n"
-        FileHandle.standardError.write(Data(line.utf8))
+        applySelectionPreset()
+    }
+
+    /// 调试用启动预置：预选中一张唱片，让右侧详情栏直接渲染。
+    ///
+    /// 用法：`VINYLSHELF_SELECT=<Discogs release id>`。
+    ///
+    /// 为什么要它：详情栏是「点一张唱片才出现」的三栏最右栏，
+    /// 而本机没有辅助功能权限、注入不了真实点击；没有这个开关，
+    /// 要截出富详情（曲目/人员/公司/编号/图集）只能改产品代码，
+    /// 那会让截图失真——插一段临时代码再删掉，截出来的图和用户实际用到的不是同一个东西。
+    /// 正常启动不带该环境变量，选中态仍由点击决定。
+    private func applySelectionPreset() {
+        guard let raw = ProcessInfo.processInfo.environment["VINYLSHELF_SELECT"],
+              let releaseId = Int(raw.trimmingCharacters(in: .whitespaces)),
+              let hit = records.first(where: { $0.discogsReleaseId == releaseId })
+        else { return }
+        selectedId = hit.id
+        FileHandle.standardError.write(Data(
+            "已预选中 release \(releaseId)：\(hit.artist) — \(hit.title)\n".utf8))
     }
 
     func reload() {

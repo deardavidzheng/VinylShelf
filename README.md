@@ -2,7 +2,15 @@
 
 本地黑胶唱片收藏管理应用，对接 [Discogs](https://www.discogs.com) 数据库。
 
-<img src="Resources/AppIcon.iconset/icon_256x256.png" width="96" alt="VinylShelf 图标">
+[![macOS](https://img.shields.io/badge/macOS-13%2B-000.svg)](https://www.apple.com/macos/)
+[![Swift](https://img.shields.io/badge/Swift-6.4-orange.svg)](https://www.swift.org/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![构建](https://img.shields.io/badge/build-bash%20%2B%20swiftc-lightgrey.svg)](build.sh)
+[![Release](https://img.shields.io/github/v/release/deardavidzheng/VinylShelf?label=Release&logo=github)](https://github.com/deardavidzheng/VinylShelf/releases)
+
+<img src="Resources/AppIcon.iconset/icon_256x256.png" width="72" alt="VinylShelf 图标">
+
+![主界面：facet 侧栏 + 唱片网格](Docs/screenshots/01-main-window.png)
 
 ## 特性
 
@@ -27,12 +35,40 @@
   Discogs 同步回来时**不会覆盖**它们。
 - **离线可用**：SQLite 本地库 + 封面磁盘缓存。
 
+## 界面
+
+**完整资料**——不是只存年份和流派。下面这条是 Rolling Stones《Dirty Work》，
+每一首曲目都带各自的制作人员，整张唱片的编号体系、参与公司、社区数据一并落库：
+
+![完整详情：逐曲制作人员、编号体系、社区评分](Docs/screenshots/03-record-detail.png)
+
+**标签列表恒定**——选中「Electronic」之后，流派列表里 Classical / Pop / Rock
+**一个都没少**，只有中栏结果变成 87 张。这是最容易做错的一处设计，
+展开讲见[「侧栏 facet 的两条设计决定」](#侧栏-facet-的两条设计决定)。
+
+![选中 Electronic 之后标签宇宙不塌缩](Docs/screenshots/02-facet-filter-stable.png)
+
+**搜索并添加**——直接在 Discogs 数据库搜，结果标注持有/想要人数与是否已在本地，
+可一次完成「本地入库 + 写入 Discogs 收藏」：
+
+![搜索添加面板](Docs/screenshots/04-search-add.png)
+
 ## 快速开始
 
+不想自己编译的话，去
+[**Releases**](https://github.com/deardavidzheng/VinylShelf/releases) 下载 `VinylShelf-1.0.0.dmg`
+（**Universal**，Apple Silicon 与 Intel 通用），拖进「应用程序」即可。
+
+自己编译（需要 Xcode 命令行工具）：
+
 ```bash
-./build.sh          # 编译 → VinylShelf.app → 签名 → DMG
+./build.sh          # 编译 arm64 + x86_64 → lipo 合成 Universal → 签名 → DMG
 open build/VinylShelf.app
 ```
+
+> `./build.sh` 会分别编译两个架构再 `lipo` 合成，并对结果做架构断言。
+> 直接给 `swiftc` 传一个 fat target 也行，但某个架构编不过时只能拿到一个残废包，
+> 分开编能立刻看出是哪一边的问题。
 
 首次使用：
 
@@ -49,36 +85,40 @@ Token 存进 `~/Library/Application Support/VinylShelf/discogs_token.secret`（�
 
 ## 增量同步原理
 
-Discogs 的 collection 接口**只返回 `date_added`，不返回"最后更新时间"**（实测 299/299 条
-都没有 `date_changed`），所以无法用时间戳做增量判断。
+Discogs 的 collection 接口**只返回 `date_added`，不返回"最后更新时间"**
+（实测每一条都没有 `date_changed`），所以无法用时间戳做增量判断。
 
 本 App 的做法是**字段指纹**：
 
-| 阶段 | 动作 | 请求数（299 张） |
+| 阶段 | 动作 | 请求数（302 张实测） |
 |------|------|------------------|
-| 1. collection | 分页拉列表，计算每条的字段指纹，与本地持久化的指纹比对 | 3（100/页） |
+| 1. collection | 分页拉列表，计算每条的字段指纹，与本地持久化的指纹比对 | 4（`per_page=100`，302 条 → 4 页） |
 | 2. detail | **只对指纹变化或从未拉过详情的条目**请求 `/releases/{id}` | 0（无变化时） |
 
 - 本地新增、线上删除：自动识别
 - 指纹未变：完全跳过，不发请求
-- 首次导入 299 张约 5.5 分钟（受 60 req/min 限流约束）
-- 日常无变化的同步：**3 个请求，几秒完成**
+- 首次导入 300 张量级约 5.5 分钟（受 60 req/min 限流约束）
+- 日常无变化的同步：**8 个请求 / 5.8 秒**（`VINYLSHELF_TRACE=1` 实测：4 次 collection
+  分页 + 2 次详情补齐 + `/oauth/identity` + collection 文件夹列表）
 
 > ⚠️ 实现要点：指纹必须用**稳定哈希**（FNV-1a），不能用 Swift 的 `String.hashValue`
 > ——后者带进程级随机种子，跨进程永不相等，会让增量在每次重启后退化成全量重拉。
 > 见 `Sources/Core/StableHash.swift`。
 
-## 数据完整性（299 张实测）
+## 数据完整性（302 张，2026-10-16 实测）
 
 ```
-总记录        299      完整详情      299
-有国家        298      有曲目表      299
-有图集        297      有原始 JSON   299
-有编号体系    225      有制作人员    223
-有参与公司    188      facet 索引  4385 条
+总记录        302      完整详情      302
+有国家        301      有曲目表      302
+有图集        300      有原始 JSON   302
+有编号体系    228      有制作人员    226
+有参与公司    190      facet 索引  4428 条
 ```
 
-`country` 只能从 `/releases/{id}` 拿到——collection 接口实测 **0/299** 提供该字段。
+年份跨度 1951–2023，`country` 覆盖 301/302。11 个维度的 facet 索引逐条与真值一致
+（`/tmp/Harness <token> verify` 输出 `✓ facet 索引一致`）。
+
+`country` 只能从 `/releases/{id}` 拿到——collection 接口实测一条都不提供该字段。
 
 ## 侧栏 facet 的两条设计决定
 
@@ -205,3 +245,13 @@ VINYLSHELF_TRACE=1 ...         # 打印每个 HTTP 请求与耗时
 - **wantlist 为空**：当前账号 Discogs 没有想读单，导入功能可用但结果为 0 条。
 - **本地新增的条目**：`discogs_instance_id = 0` 表示「还没进 Discogs 收藏」，
   是「待推送」的判据；推送成功并下次同步后会被原地「收养」为正式条目，不会变成两行。
+- **`images` 索引表与磁盘脱节**：早期那批封面由独立脚本下载，没有写进索引表，
+  所以按索引表判断文件归属去清理会误删。当前显示不受影响（文件名由 URL 重算 MD5）。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 deardavidzheng
+
+代码可自由使用、修改与再分发。**但 Discogs 的数据不是我的**：
+本 App 只是客户端，你的收藏数据来自你自己的 Discogs 账号；
+仓库里不含任何人的 Discogs 数据、封面图片或访问令牌。

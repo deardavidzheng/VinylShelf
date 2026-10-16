@@ -23,11 +23,30 @@ while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$ROOT/Sources" -name "*
 echo "    源文件 ${#SOURCES[@]} 个"
 
 SDK="$(xcrun --show-sdk-path)"
-xcrun swiftc -O -sdk "$SDK" \
-  -target arm64-apple-macos13.0 \
-  -framework SwiftUI -framework AppKit \
-  -o "$APP/Contents/MacOS/$EXECUTABLE" \
-  "${SOURCES[@]}"
+# ★ Universal 双架构：Intel Mac 加载不了纯 arm64 的二进制（不是被 Gatekeeper 拦，
+#   是根本起不来）。两个架构分别编译再 lipo 合成——比直接传 fat target 稳，
+#   某个架构编不过时能立刻看出是哪一边的问题，而不是得到一个残废包。
+SLICE_DIR="$(mktemp -d)"
+for ARCH in arm64 x86_64; do
+  echo "    → $ARCH"
+  xcrun swiftc -O -sdk "$SDK" \
+    -target "${ARCH}-apple-macos13.0" \
+    -framework SwiftUI -framework AppKit \
+    -o "$SLICE_DIR/$EXECUTABLE.${ARCH}" \
+    "${SOURCES[@]}"
+done
+lipo -create "$SLICE_DIR/$EXECUTABLE.arm64" "$SLICE_DIR/$EXECUTABLE.x86_64" \
+  -output "$APP/Contents/MacOS/$EXECUTABLE"
+
+# 架构断言。lipo -archs 的输出顺序不保证（实测 -create arm64 x86_64
+# 给出的是 "x86_64 arm64"），必须排序后比较，否则得到一条永远红的断言。
+GOT=$(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE" | tr ' ' '\n' | sort | tr '\n' ' ')
+WANT=$(echo "arm64 x86_64" | tr ' ' '\n' | sort | tr '\n' ' ')
+if [ "$GOT" != "$WANT" ]; then
+  echo "✗ 架构不对：期望 '$WANT'，实际 '$GOT'"
+  exit 1
+fi
+echo "    ✓ 架构: $GOT"
 
 chmod +x "$APP/Contents/MacOS/$EXECUTABLE"
 echo "    可执行文件: $(du -h "$APP/Contents/MacOS/$EXECUTABLE" | cut -f1)"
